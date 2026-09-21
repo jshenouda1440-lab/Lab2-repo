@@ -44,21 +44,27 @@ static int db_grow(DB *db, size_t newcap) {
      * do NOT do `db->items = (Record *)realloc(db->items, ...)`, that
      * leaks the old block on failure. Assign to a temporary first,
      * check it, THEN commit db->items and db->cap. */
-    (void)db;
-    (void)newcap;
-    return 0;
+	Record *temp;
+	temp =(Record *)(realloc)(db->items, newcap*sizeof(Record));
+	if(temp == NULL){return 0;}
+	db->items = temp;
+	db->cap =  newcap;
+	return 1;
 }
 
 /* Return the index of the record with this id, or db->count if absent.
  * (__attribute__((unused)) only for the starter, same as above.) */
 __attribute__((unused))
 static size_t db_index_of(const DB *db, int id) {
-    /* TODO: linear scan. Return db->count when not found (a common
+   /* TODO: linear scan. Return db->count when not found (a common
      * "not found" sentinel for zero-based arrays). */
-    (void)db;
-    (void)id;
-    return 0;
+	for(size_t i = 0; i< db->count; i++){
+	if(db->items[i].id == id){
+	return i; 
 }
+	}
+	return db->count;
+ }
 
 /* ---------- lifecycle ---------- */
 
@@ -67,10 +73,20 @@ DB *DB_create(size_t initial_capacity) {
      * (or 4 if the caller passed 0), initialize count = 0. If EITHER
      * malloc fails, clean up the one that succeeded and return NULL.
      * That partial-cleanup case is the leak valgrind will find. */
-    (void)initial_capacity;
-    return NULL;
-}
+	if(initial_capacity == 0){ initial_capacity = 4;}
+	DB *pointerDB = (DB *)(malloc(sizeof(DB)));
+	if(pointerDB == NULL){return NULL;}
+	Record *PtrItems =(Record *)(malloc(sizeof(Record)*initial_capacity));
+		if(PtrItems == NULL){
+		free(pointerDB);
+		return NULL;
+		}
+	pointerDB->count = 0;
+	pointerDB->items = PtrItems;
+	pointerDB->cap = initial_capacity;
+	return pointerDB;
 
+}
 void DB_destroy(DB *db) {
     /* TODO: DB_destroy(NULL) is a no-op. Otherwise:
      *   1) free each items[i].name        (every owned string)
@@ -78,7 +94,13 @@ void DB_destroy(DB *db) {
      *   3) free(db)                        (the DB itself)
      * That order is not stylistic -- freeing items first orphans
      * every name, and valgrind reports those as `indirectly lost`. */
-    (void)db;
+	if(db == NULL){return;}
+	for(size_t i =0; i< db->count; i++){
+	free(db->items[i].name);
+	}
+	free(db->items);
+	free(db);
+    
 }
 
 /* ---------- mutation ---------- */
@@ -90,12 +112,20 @@ int DB_add(DB *db, int id, const char *name, double gpa) {
      *   - my_strdup(name); if that fails, return 0 with DB unchanged
      *   - append and increment count
      */
-    (void)db;
-    (void)id;
-    (void)name;
-    (void)gpa;
-    return 0;
+    if(db_index_of(db, id) != db->count){return 0;}
+	if(db->count == db->cap){
+	int temp = db_grow(db,2*db->cap);
+	if(temp ==0){return 0;}
+	}
+	char *tempChar = my_strdup(name);
+	if(tempChar == NULL){return 0;}
+	db->items[db->count].id =id; 
+	db->items[db->count].gpa =gpa;
+	db->items[db->count].name = tempChar;
+	db->count = db->count +1;
+ return 1;
 }
+
 
 int DB_remove(DB *db, int id) {
     /* TODO:
@@ -107,17 +137,22 @@ int DB_remove(DB *db, int id) {
      *     you picked, and why, in your README.
      *   - decrement count
      */
-    (void)db;
-    (void)id;
-    return 0;
+	size_t index = db_index_of(db, id);
+	if(index == db->count){return 0;}
+	free(db->items[index].name);
+	db->items[index] = db->items[db->count - 1]; //take last person and shoves them into gap
+	db->count = db->count -1;
+	
+
+    return 1;
 }
 
 int DB_update_gpa(DB *db, int id, double gpa) {
     /* TODO: find, then overwrite items[i].gpa. Return 0 if absent. */
-    (void)db;
-    (void)id;
-    (void)gpa;
-    return 0;
+ size_t index = db_index_of(db, id);
+        if(index == db->count){return 0;}
+	db->items[index].gpa = gpa;
+    return 1;
 }
 
 /* ---------- read-only ---------- */
@@ -128,44 +163,61 @@ const Record *DB_find(const DB *db, int id) {
      * -- explain in your README why returning a non-const `Record *`
      * would break the ADT (client could free(r->name) or overwrite
      * r->id behind the DB's back). */
-    (void)db;
-    (void)id;
-    return NULL;
+ size_t index = db_index_of(db, id);
+ if(index == db->count){return NULL;}
+const Record *recordPtr = &(db->items[index]);
+    return recordPtr;
 }
 
 size_t DB_size(const DB *db) {
     /* TODO */
-    (void)db;
-    return 0;
+    return db->count;
 }
 
 size_t DB_capacity(const DB *db) {
     /* TODO */
-    (void)db;
-    return 0;
+    
+    return db->cap;
 }
 
 void DB_print(const DB *db) {
     /* TODO: one line per record, in insertion order. Use exactly
      *   printf("id=%d name=%s gpa=%.2f\n", id, name, gpa);
      * so the autograder's diff can find your output. */
-    (void)db;
+	for(size_t i =0 ; i< db->count; i++){
+	printf("id=%d name=%s gpa=%.2f\n", db->items[i].id, db->items[i].name, db->items[i].gpa);
+	}
+
 }
 
 /* ---------- persistence ---------- */
 
-int DB_save(const DB *db, const char *path) {
+
     /* TODO: fopen(path, "w"), one line per record:
      *   fprintf(f, "%d,%s,%.2f\n", id, name, gpa);
      * fclose. Return 0 on any I/O failure. Names in your test data
      * will not contain commas or newlines -- do not worry about
      * quoting for this lab. */
-    (void)db;
-    (void)path;
-    return 0;
+	int DB_save(const DB *db, const char *path) { // this whole function is AI generated.
+    // 1. Open the file for writing ("w")
+    FILE *f = fopen(path, "w");
+    if (f == NULL) {
+        return 0; // Return 0 immediately if the file fails to open
+    }
+
+    // 2. Loop through and write each record to the file
+    for (size_t i = 0; i < db->count; i++) {
+        fprintf(f, "%d,%s,%.2f\n", db->items[i].id, db->items[i].name, db->items[i].gpa);
+    }
+
+    // 3. Close the file to safely save it to disk
+    fclose(f);
+
+    return 1; // Return 1 for success
 }
 
-int DB_load(DB *db, const char *path) {
+
+
     /* TODO: fopen(path, "r"), read one line at a time, parse
      *   id,name,gpa
      * with fscanf or by hand. For each valid line call DB_add;
@@ -176,7 +228,33 @@ int DB_load(DB *db, const char *path) {
      *
      * Whether the records added before the bad line stay in the
      * DB is your design choice -- document it in the README. */
-    (void)db;
-    (void)path;
-    return 0;
+   int DB_load(DB *db, const char *path) {// this function is AI generated.
+    FILE *f = fopen(path, "r");
+    if (f == NULL) {
+        return 0;
+    }
+
+    int id;
+    char name[256];
+    double gpa;
+
+    // fscanf returns the number of correctly matched items (we expect 3)
+    while (fscanf(f, "%d,%255[^,],%lf", &id, name, &gpa) == 3) {
+        // Try to add the parsed record. If DB_add fails (e.g., duplicate ID), abort.
+        if (DB_add(db, id, name, gpa) == 0) {
+            fclose(f);
+            return 0; 
+        }
+    }
+
+    // If the loop stopped but we aren't at the End Of File (EOF), 
+    // it means we hit a malformed line (parse failure).
+    if (!feof(f)) {
+        fclose(f);
+        return 0; 
+    }
+
+    fclose(f);
+    return 1;
+
 }
